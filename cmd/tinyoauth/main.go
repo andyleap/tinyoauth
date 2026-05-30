@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -18,11 +19,24 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+// Build information, set via -ldflags at release time by GoReleaser.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	cfgPath := flag.String("config", envOr("TINYOAUTH_CONFIG", "/etc/tinyoauth/config.yaml"), "path to config file")
+	showVersion := flag.Bool("version", false, "print version information and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("tinyoauth %s (commit %s, built %s)\n", version, commit, date)
+		return
+	}
 
 	cfg, err := config.Load(*cfgPath)
 	must(logger, "load config", err)
@@ -62,6 +76,8 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 	logger.Info("tinyoauth listening",
+		"version", version,
+		"commit", commit,
 		"addr", cfg.Listen,
 		"auth_host", cfg.AuthHost,
 		"issuer", cfg.Issuer,
