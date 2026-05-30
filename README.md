@@ -30,15 +30,15 @@ configured through ordinary Kubernetes resources (Traefik `Middleware`s +
                 ┌─────────────┐   forwardAuth    ┌────────────┐
   browser ─────▶│   Traefik   │ ───/check/...──▶ │  tinyoauth │ ──▶ OIDC provider
                 └─────────────┘                  └────────────┘
-                       │  200 + identity headers / 302 to /start
+                       │  2xx + identity headers / 302 to /start
                        ▼
                  protected app
 ```
 
 1. Traefik's `forwardAuth` middleware sends each request to
-   `tinyoauth/check/<namespace>/<middleware-name>`.
+   `/check/<namespace>/<middleware-name>`.
 2. tinyoauth reads the session cookie. If valid and the policy allows the
-   request, it returns `204` with `X-Auth-Request-*` identity headers that
+   request, it returns `202` with `X-Auth-Request-*` identity headers that
    Traefik copies onto the upstream request.
 3. If there's no valid session, it returns a redirect to `/start`, which kicks
    off the OIDC authorization-code flow; `/callback` completes it and sets the
