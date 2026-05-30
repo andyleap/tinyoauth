@@ -4,6 +4,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"reflect"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -32,6 +34,8 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(b, &c); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	applyEnvFallbacks(&c)
+
 	if c.Listen == "" {
 		c.Listen = ":4180"
 	}
@@ -43,12 +47,6 @@ func Load(path string) (*Config, error) {
 	}
 	if c.AnnotationPrefix == "" {
 		c.AnnotationPrefix = "tinyoauth.andyleap.dev"
-	}
-	if c.Namespace == "" {
-		c.Namespace = os.Getenv("POD_NAMESPACE")
-	}
-	if c.ServiceAccount == "" {
-		c.ServiceAccount = os.Getenv("POD_SERVICE_ACCOUNT")
 	}
 
 	missing := []string{}
@@ -62,10 +60,10 @@ func Load(path string) (*Config, error) {
 		missing = append(missing, "cookie_secret")
 	}
 	if c.Namespace == "" {
-		missing = append(missing, "namespace (or POD_NAMESPACE env)")
+		missing = append(missing, "namespace (or TINYOAUTH_NAMESPACE env)")
 	}
 	if c.ServiceAccount == "" {
-		missing = append(missing, "service_account (or POD_SERVICE_ACCOUNT env)")
+		missing = append(missing, "service_account (or TINYOAUTH_SERVICE_ACCOUNT env)")
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("config missing required: %v", missing)
@@ -84,3 +82,25 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) CookieKey() []byte { return c.cookieKey }
+
+// applyEnvFallbacks fills any empty string field from the environment, using
+// the env var TINYOAUTH_<YAML_TAG> derived from each field's yaml tag. Values
+// already set from the config file are left untouched, so the config file
+// always takes precedence over the environment.
+func applyEnvFallbacks(c *Config) {
+	v := reflect.ValueOf(c).Elem()
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		f := v.Field(i)
+		if f.Kind() != reflect.String || !f.CanSet() || f.String() != "" {
+			continue
+		}
+		yamlTag := strings.Split(t.Field(i).Tag.Get("yaml"), ",")[0]
+		if yamlTag == "" || yamlTag == "-" {
+			continue
+		}
+		if val := os.Getenv("TINYOAUTH_" + strings.ToUpper(yamlTag)); val != "" {
+			f.SetString(val)
+		}
+	}
+}
