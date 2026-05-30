@@ -1,0 +1,14 @@
+# Global tinyoauth config. Per-app data lives in K8s resources (Middleware
+# annotations + ConfigMaps), not here.
+#
+# cookie_secret = openssl rand -hex 32
+listen: ":4180"
+auth_host: "auth.andyleap.dev"
+issuer: "https://id.andyleap.dev"
+cookie_name: "_tinyoauth"
+cookie_domain: ".andyleap.dev"
+cookie_secret: "REPLACE_WITH_64_HEX_CHARS"
+session_ttl: "12h"
+annotation_prefix: "tinyoauth.andyleap.dev"
+# namespace / service_account default to POD_NAMESPACE / POD_SERVICE_ACCOUNT
+# env vars (set via downward API in the Deployment).

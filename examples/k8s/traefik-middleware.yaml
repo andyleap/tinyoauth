@@ -1,0 +1,99 @@
+# Per-app wiring. Three resources per protected app:
+#
+#  1. tinyoauth-app-<name>   ConfigMap     (Terraform-owned: client_id, audience)
+#  2. tinyoauth-policy-<name> ConfigMap    (GitOps-owned: rules table; optional)
+#  3. Traefik Middleware                   (GitOps-owned: ForwardAuth + refs)
+#
+# The Middleware's forwardAuth.address embeds its own <ns>/<name> so the
+# bouncer can resolve back to it. Convention: address ends in
+#   /check/<metadata.namespace>/<metadata.name>
+---
+# (1) TF-owned: written by the same Terraform module that creates the
+# Pocket ID OIDC client.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tinyoauth-app-grafana
+  namespace: monitoring
+data:
+  client_id: "grafana-k8s"
+  audience: "https://id.andyleap.dev"
+---
+# (2) GitOps-owned: access policy. Optional — omit for "any authenticated user".
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tinyoauth-policy-grafana
+  namespace: monitoring
+data:
+  rules.yaml: |
+    default_allowed_groups: ["users"]
+    allowed_subs: ["break-glass-user"]
+    rules:
+      - path_prefix: "/admin"
+        allowed_groups: ["grafana-admins"]
+      - path_prefix: "/"
+        allowed_groups: ["users"]
+---
+# (3) Traefik Middleware. Annotations point at the two ConfigMaps above.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: grafana
+  namespace: monitoring
+  annotations:
+    tinyoauth.andyleap.dev/config-ref: "tinyoauth-app-grafana"
+    tinyoauth.andyleap.dev/policy-ref: "tinyoauth-policy-grafana"
+spec:
+  forwardAuth:
+    address: "http://tinyoauth.tinyoauth.svc.cluster.local/check/monitoring/grafana"
+    trustForwardHeader: true
+    authResponseHeaders:
+    - X-Auth-Request-User
+    - X-Auth-Request-Email
+    - X-Auth-Request-Preferred-Username
+    - X-Auth-Request-Name
+    - X-Auth-Request-Groups
+---
+# Example HTTPRoute. One filter ref per route.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  parentRefs:
+  - name: traefik
+    namespace: traefik
+  hostnames: ["grafana.andyleap.dev"]
+  rules:
+  - matches:
+    - path: { type: PathPrefix, value: / }
+    filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: traefik.io
+        kind: Middleware
+        name: grafana
+    backendRefs:
+    - name: grafana
+      port: 80
+---
+# The auth host itself: tinyoauth must be reachable on the public domain so
+# /start and /callback share the cookie domain with the apps.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: tinyoauth-public
+  namespace: tinyoauth
+spec:
+  parentRefs:
+  - name: traefik
+    namespace: traefik
+  hostnames: ["auth.andyleap.dev"]
+  rules:
+  - matches:
+    - path: { type: PathPrefix, value: / }
+    backendRefs:
+    - name: tinyoauth
+      port: 80
