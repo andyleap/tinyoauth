@@ -22,6 +22,14 @@ type Config struct {
 	Namespace        string `yaml:"namespace"`
 	ServiceAccount   string `yaml:"service_account"`
 
+	// AdminClientID enables the authenticated /debug page via OIDC self-login.
+	// When empty, /debug is disabled. AdminGroups/AdminSubs (CSV) restrict who
+	// may view it; if AdminClientID is set but both are empty, /debug stays
+	// disabled (fail closed).
+	AdminClientID string `yaml:"admin_client_id"`
+	AdminGroups   string `yaml:"admin_groups"`
+	AdminSubs     string `yaml:"admin_subs"`
+
 	cookieKey []byte
 }
 

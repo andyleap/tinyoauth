@@ -59,13 +59,24 @@ func main() {
 	resolver := apps.New(dyn, kube, cfg.AnnotationPrefix)
 	minter := tokens.New(kube, cfg.Namespace, cfg.ServiceAccount)
 
+	adminGroups := apps.SplitCSV(cfg.AdminGroups)
+	adminSubs := apps.SplitCSV(cfg.AdminSubs)
+	if cfg.AdminClientID != "" && len(adminGroups) == 0 && len(adminSubs) == 0 {
+		logger.Warn("admin_client_id set but no admin_groups/admin_subs; /debug stays disabled (fail closed)")
+	}
+
 	srv := &handler.Server{
-		Cfg:        cfg,
-		Codec:      codec,
-		SessionTTL: ttl,
-		Apps:       resolver,
-		Minter:     minter,
-		Logger:     logger,
+		Cfg:         cfg,
+		Codec:       codec,
+		SessionTTL:  ttl,
+		Apps:        resolver,
+		Minter:      minter,
+		Logger:      logger,
+		AdminGroups: adminGroups,
+		AdminSubs:   adminSubs,
+		Version:     version,
+		Commit:      commit,
+		Date:        date,
 	}
 
 	hs := &http.Server{

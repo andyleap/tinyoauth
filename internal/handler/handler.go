@@ -26,9 +26,26 @@ type Server struct {
 	Apps       *apps.Resolver
 	Minter     *tokens.Minter
 	Logger     *slog.Logger
+
+	// AdminGroups/AdminSubs are the parsed CSV forms of the corresponding config
+	// fields; they gate access to the /debug page via the synthetic "self" app.
+	AdminGroups []string
+	AdminSubs   []string
+
+	// Build information, surfaced on the homepage and /debug.
+	Version string
+	Commit  string
+	Date    string
 }
 
 const flowCookieName = "_tinyoauth_flow"
+
+// selfAppKey is a reserved, synthetic app key used to log an admin into
+// tinyoauth itself (for the /debug page) without a Kubernetes-backed app. Both
+// halves contain underscores, which RFC1123 Kubernetes names cannot, so it can
+// never collide with a real namespace/middleware while still round-tripping
+// through splitAppKey.
+const selfAppKey = "_self_/_self_"
 
 func (s *Server) Routes() *http.ServeMux {
 	m := http.NewServeMux()
@@ -37,7 +54,46 @@ func (s *Server) Routes() *http.ServeMux {
 	m.HandleFunc("/callback", s.handleCallback)
 	m.HandleFunc("/sign_out", s.handleSignOut)
 	m.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
+	m.HandleFunc("/debug", s.handleDebug)
+	m.HandleFunc("/", s.handleHome)
 	return m
+}
+
+// debugEnabled reports whether the authenticated /debug page is reachable. It
+// requires an admin OIDC client plus at least one admin group or subject;
+// otherwise it fails closed (an empty allowlist would otherwise admit every
+// authenticated user via App.Permit).
+func (s *Server) debugEnabled() bool {
+	return s.Cfg.AdminClientID != "" && (len(s.AdminGroups) > 0 || len(s.AdminSubs) > 0)
+}
+
+// selfApp builds the synthetic admin app used for /debug self-login. It returns
+// an error when /debug is disabled, so the OIDC flow refuses to start.
+func (s *Server) selfApp() (*apps.App, error) {
+	if !s.debugEnabled() {
+		return nil, fmt.Errorf("debug self-login disabled")
+	}
+	ns, name, _ := splitAppKey(selfAppKey)
+	return &apps.App{
+		Namespace:     ns,
+		Name:          name,
+		ClientID:      s.Cfg.AdminClientID,
+		Audience:      s.Cfg.Issuer,
+		Scopes:        []string{"openid", "profile", "email", "groups"},
+		DefaultGroups: s.AdminGroups,
+		AllowedSubs:   s.AdminSubs,
+	}, nil
+}
+
+// resolveApp resolves an app key, intercepting the reserved self key with the
+// synthetic admin app and delegating everything else to the Kubernetes-backed
+// resolver. Only /start and /callback use this; /check stays on Apps.Resolve so
+// the self app is never reachable via forward-auth.
+func (s *Server) resolveApp(ctx context.Context, ns, name string) (*apps.App, error) {
+	if appKey(ns, name) == selfAppKey {
+		return s.selfApp()
+	}
+	return s.Apps.Resolve(ctx, ns, name)
 }
 
 func parseAppPath(p string) (ns, name string, ok bool) {
@@ -86,6 +142,10 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 	ns, name, ok := parseAppPath(r.URL.Path)
 	if !ok {
 		http.Error(w, "bad /check path; expected /check/<namespace>/<name>", http.StatusBadRequest)
+		return
+	}
+	if appKey(ns, name) == selfAppKey {
+		http.Error(w, "unknown app", http.StatusNotFound)
 		return
 	}
 	app, err := s.Apps.Resolve(r.Context(), ns, name)
@@ -152,7 +212,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing/invalid app", http.StatusBadRequest)
 		return
 	}
-	app, err := s.Apps.Resolve(r.Context(), ns, name)
+	app, err := s.resolveApp(r.Context(), ns, name)
 	if err != nil {
 		http.Error(w, "unknown app", http.StatusNotFound)
 		return
@@ -227,7 +287,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid flow app key", http.StatusBadRequest)
 		return
 	}
-	app, err := s.Apps.Resolve(r.Context(), ns, name)
+	app, err := s.resolveApp(r.Context(), ns, name)
 	if err != nil {
 		http.Error(w, "unknown app", http.StatusNotFound)
 		return

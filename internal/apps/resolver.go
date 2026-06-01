@@ -3,6 +3,7 @@ package apps
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -69,6 +70,28 @@ func New(dyn dynamic.Interface, kube kubernetes.Interface, prefix string) *Resol
 
 func (r *Resolver) ann(key string) string { return r.AnnotationPrefix + "/" + key }
 
+// CacheEntry is a read-only view of a single resolved app held in the cache.
+type CacheEntry struct {
+	Key     string
+	App     *App
+	Expires time.Time
+	Expired bool
+}
+
+// Snapshot returns a stable, sorted copy of the resolver cache for diagnostics.
+// The *App values are immutable after caching, so sharing the pointers is safe.
+func (r *Resolver) Snapshot() []CacheEntry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	out := make([]CacheEntry, 0, len(r.cache))
+	for k, c := range r.cache {
+		out = append(out, CacheEntry{Key: k, App: c.app, Expires: c.expires, Expired: now.After(c.expires)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
+}
+
 func (r *Resolver) Resolve(ctx context.Context, namespace, name string) (*App, error) {
 	cacheKey := namespace + "/" + name
 
@@ -95,7 +118,7 @@ func (r *Resolver) Resolve(ctx context.Context, namespace, name string) (*App, e
 	}
 	clientID := strings.TrimSpace(cfgCM.Data["client_id"])
 	audience := strings.TrimSpace(cfgCM.Data["audience"])
-	scopes := splitCSV(cfgCM.Data["scopes"])
+	scopes := SplitCSV(cfgCM.Data["scopes"])
 	if clientID == "" {
 		return nil, fmt.Errorf("configmap %s/%s missing data.client_id", namespace, configRef)
 	}
@@ -112,10 +135,10 @@ func (r *Resolver) Resolve(ctx context.Context, namespace, name string) (*App, e
 	}
 
 	if v := anns[r.ann("allowed-groups")]; v != "" {
-		app.DefaultGroups = splitCSV(v)
+		app.DefaultGroups = SplitCSV(v)
 	}
 	if v := anns[r.ann("allowed-subs")]; v != "" {
-		app.AllowedSubs = splitCSV(v)
+		app.AllowedSubs = SplitCSV(v)
 	}
 
 	if polRef := anns[r.ann("policy-ref")]; polRef != "" {
@@ -146,7 +169,7 @@ func (r *Resolver) Resolve(ctx context.Context, namespace, name string) (*App, e
 	return app, nil
 }
 
-func splitCSV(s string) []string {
+func SplitCSV(s string) []string {
 	if s == "" {
 		return nil
 	}
